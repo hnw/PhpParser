@@ -1,0 +1,13 @@
+== Execution example for PHP source code with syntax error ==
+
+ $ ./print-php-parse-tree.php ./targets/valid-example1.php > valid-example1.dot
+ $ dot -Tpng valid-example1.dot -o valid-example1.png
+
+== Execution example for PHP source code with syntax error ==
+
+ $ ./print-php-parse-tree.php ./targets/invalid-example1.php
+ invalid syntax
+ $
+
+--
+Enjoy!
