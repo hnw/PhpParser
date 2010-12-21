@@ -1,0 +1,854 @@
+%{
+/*
+   +----------------------------------------------------------------------+
+   | Zend Engine                                                          |
+   +----------------------------------------------------------------------+
+   | Copyright (c) 1998-2006 Zend Technologies Ltd. (http://www.zend.com) |
+   +----------------------------------------------------------------------+
+   | This source file is subject to version 2.00 of the Zend license,     |
+   | that is bundled with this package in the file LICENSE, and is        |
+   | available through the world-wide-web at the following url:           |
+   | http://www.zend.com/license/2_00.txt.                                |
+   | If you did not receive a copy of the Zend license and are unable to  |
+   | obtain it through the world-wide-web, please send a note to          |
+   | license@zend.com so we can mail you a copy immediately.              |
+   +----------------------------------------------------------------------+
+   | Authors: Andi Gutmans <andi@zend.com>                                |
+   |          Zeev Suraski <zeev@zend.com>                                |
+   +----------------------------------------------------------------------+
+*/
+
+/* $Id: zend_language_parser.y,v 1.160.2.4.2.10 2008/03/10 14:54:47 felipe Exp $ */
+
+/*
+ * LALR shift/reduce conflicts and how they are resolved:
+ *
+ * - 2 shift/reduce conflicts due to the dangeling elseif/else ambiguity.  Solved by shift.
+ *
+ */
+
+
+require_once(dirname(__FILE__).'/PhpSyntaxNode.php');
+
+%}
+
+%pure_parser
+%expect 2
+
+%left TT_INCLUDE TT_INCLUDE_ONCE TT_EVAL TT_REQUIRE TT_REQUIRE_ONCE
+%left ','
+%left TT_LOGICAL_OR
+%left TT_LOGICAL_XOR
+%left TT_LOGICAL_AND
+%right TT_PRINT
+%left '=' TT_PLUS_EQUAL TT_MINUS_EQUAL TT_MUL_EQUAL TT_DIV_EQUAL TT_CONCAT_EQUAL TT_MOD_EQUAL TT_AND_EQUAL TT_OR_EQUAL TT_XOR_EQUAL TT_SL_EQUAL TT_SR_EQUAL
+%left '?' ':'
+%left TT_BOOLEAN_OR
+%left TT_BOOLEAN_AND
+%left '|'
+%left '^'
+%left '&'
+%nonassoc TT_IS_EQUAL TT_IS_NOT_EQUAL TT_IS_IDENTICAL TT_IS_NOT_IDENTICAL
+%nonassoc '<' TT_IS_SMALLER_OR_EQUAL '>' TT_IS_GREATER_OR_EQUAL
+%left TT_SL TT_SR
+%left '+' '-' '.'
+%left '*' '/' '%'
+%right '!'
+%nonassoc TT_INSTANCEOF
+%right '~' TT_INC TT_DEC TT_INT_CAST TT_DOUBLE_CAST TT_STRING_CAST TT_ARRAY_CAST TT_OBJECT_CAST TT_BOOL_CAST TT_UNSET_CAST '@'
+%right '['
+%nonassoc TT_NEW TT_CLONE
+%token TT_EXIT
+%token TT_IF
+%left TT_ELSEIF
+%left TT_ELSE
+%left TT_ENDIF
+%token TT_LNUMBER
+%token TT_DNUMBER
+%token TT_STRING
+%token TT_STRING_VARNAME
+%token TT_VARIABLE
+%token TT_NUM_STRING
+%token TT_INLINE_HTML
+%token TT_CHARACTER
+%token TT_BAD_CHARACTER
+%token TT_ENCAPSED_AND_WHITESPACE
+%token TT_CONSTANT_ENCAPSED_STRING
+%token TT_ECHO
+%token TT_DO
+%token TT_WHILE
+%token TT_ENDWHILE
+%token TT_FOR
+%token TT_ENDFOR
+%token TT_FOREACH
+%token TT_ENDFOREACH
+%token TT_DECLARE
+%token TT_ENDDECLARE
+%token TT_AS
+%token TT_SWITCH
+%token TT_ENDSWITCH
+%token TT_CASE
+%token TT_DEFAULT
+%token TT_BREAK
+%token TT_CONTINUE
+%token TT_FUNCTION
+%token TT_CONST
+%token TT_RETURN
+%token TT_TRY
+%token TT_CATCH
+%token TT_THROW
+%token TT_USE
+%token TT_GLOBAL
+%right TT_STATIC TT_ABSTRACT TT_FINAL TT_PRIVATE TT_PROTECTED TT_PUBLIC
+%token TT_VAR
+%token TT_UNSET
+%token TT_ISSET
+%token TT_EMPTY
+%token TT_HALT_COMPILER
+%token TT_CLASS
+%token TT_INTERFACE
+%token TT_EXTENDS
+%token TT_IMPLEMENTS
+%token TT_OBJECT_OPERATOR
+%token TT_DOUBLE_ARROW
+%token TT_LIST
+%token TT_ARRAY
+%token TT_CLASS_C
+%token TT_METHOD_C
+%token TT_FUNC_C
+%token TT_LINE
+%token TT_FILE
+%token TT_COMMENT
+%token TT_DOC_COMMENT
+%token TT_OPEN_TAG
+%token TT_OPEN_TAG_WITH_ECHO
+%token TT_CLOSE_TAG
+%token TT_WHITESPACE
+%token TT_START_HEREDOC
+%token TT_END_HEREDOC
+%token TT_DOLLAR_OPEN_CURLY_BRACES
+%token TT_CURLY_OPEN
+%token TT_PAAMAYIM_NEKUDOTAYIM
+
+%% /* Rules */
+
+start:
+		top_statement_list	{ $$ = new PhpSyntaxNode('start', array($1)); }
+;
+
+top_statement_list:
+		top_statement_list top_statement	{ $$ = new PhpSyntaxNode('top_statement_list', array($1, $2)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('top_statement_list', array()); }
+;
+
+
+top_statement:
+		statement	{ $$ = new PhpSyntaxNode('top_statement', array($1)); }
+	|	function_declaration_statement	{ $$ = new PhpSyntaxNode('top_statement', array($1)); }
+	|	class_declaration_statement	{ $$ = new PhpSyntaxNode('top_statement', array($1)); }
+	|	TT_HALT_COMPILER '(' ')' ';'	{ $$ = new PhpSyntaxNode('top_statement', array($1, $2, $3, $4)); }
+;
+
+
+inner_statement_list:
+		inner_statement_list inner_statement	{ $$ = new PhpSyntaxNode('inner_statement_list', array($1, $2)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('inner_statement_list', array()); }
+;
+
+
+inner_statement:
+		statement	{ $$ = new PhpSyntaxNode('inner_statement', array($1)); }
+	|	function_declaration_statement	{ $$ = new PhpSyntaxNode('inner_statement', array($1)); }
+	|	class_declaration_statement	{ $$ = new PhpSyntaxNode('inner_statement', array($1)); }
+	|	TT_HALT_COMPILER '(' ')' ';'	{ $$ = new PhpSyntaxNode('inner_statement', array($1, $2, $3, $4)); }
+;
+
+
+statement:
+		unticked_statement	{ $$ = new PhpSyntaxNode('statement', array($1)); }
+;
+
+unticked_statement:
+		'{' inner_statement_list '}'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_IF '(' expr ')' statement elseif_list else_single	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5, $6, $7)); }
+	|	TT_IF '(' expr ')' ':' inner_statement_list new_elseif_list new_else_single TT_ENDIF ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)); }
+	|	TT_WHILE '(' expr ')' while_statement	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5)); }
+	|	TT_DO statement TT_WHILE '(' expr ')' ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5, $6, $7)); }
+	|	TT_FOR '(' for_expr ';' for_expr ';' for_expr ')' for_statement	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5, $6, $7, $8, $9)); }
+	|	TT_SWITCH '(' expr ')' switch_case_list	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5)); }
+	|	TT_BREAK ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2)); }
+	|	TT_BREAK expr ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_CONTINUE ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2)); }
+	|	TT_CONTINUE expr ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_RETURN ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2)); }
+	|	TT_RETURN expr_without_variable ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_RETURN variable ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_GLOBAL global_var_list ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_STATIC static_var_list ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_ECHO echo_expr_list ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_INLINE_HTML	{ $$ = new PhpSyntaxNode('unticked_statement', array($1)); }
+	|	expr ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2)); }
+	|	TT_USE use_filename ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+	|	TT_UNSET '(' unset_variables ')' ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5)); }
+	|	TT_FOREACH '(' variable TT_AS foreach_variable foreach_optional_arg ')' foreach_statement	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5, $6, $7, $8)); }
+	|	TT_FOREACH '(' expr_without_variable TT_AS variable foreach_optional_arg ')' foreach_statement	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5, $6, $7, $8)); }
+	|	TT_DECLARE '(' declare_list ')' declare_statement	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5)); }
+	|	';' /* empty statement */	{ $$ = new PhpSyntaxNode('unticked_statement', array($1)); }
+	|	TT_TRY '{' inner_statement_list '}' TT_CATCH '(' fully_qualified_class_name TT_VARIABLE ')' '{' inner_statement_list '}' additional_catches	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)); }
+	|	TT_THROW expr ';'	{ $$ = new PhpSyntaxNode('unticked_statement', array($1, $2, $3)); }
+;
+
+
+additional_catches:
+		non_empty_additional_catches	{ $$ = new PhpSyntaxNode('additional_catches', array($1)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('additional_catches', array()); }
+;
+
+non_empty_additional_catches:
+		additional_catch	{ $$ = new PhpSyntaxNode('non_empty_additional_catches', array($1)); }
+	|	non_empty_additional_catches additional_catch	{ $$ = new PhpSyntaxNode('non_empty_additional_catches', array($1, $2)); }
+;
+
+
+additional_catch:
+		TT_CATCH '(' fully_qualified_class_name TT_VARIABLE ')' '{' inner_statement_list '}'	{ $$ = new PhpSyntaxNode('additional_catch', array($1, $2, $3, $4, $5, $6, $7, $8)); }
+;
+
+
+unset_variables:
+		unset_variable	{ $$ = new PhpSyntaxNode('unset_variables', array($1)); }
+	|	unset_variables ',' unset_variable	{ $$ = new PhpSyntaxNode('unset_variables', array($1, $2, $3)); }
+;
+
+unset_variable:
+		variable	{ $$ = new PhpSyntaxNode('unset_variable', array($1)); }
+;
+
+use_filename:
+		TT_CONSTANT_ENCAPSED_STRING	{ $$ = new PhpSyntaxNode('use_filename', array($1)); }
+	|	'(' TT_CONSTANT_ENCAPSED_STRING ')'	{ $$ = new PhpSyntaxNode('use_filename', array($1, $2, $3)); }
+;
+
+
+function_declaration_statement:
+		unticked_function_declaration_statement	{ $$ = new PhpSyntaxNode('function_declaration_statement', array($1)); }
+;
+
+class_declaration_statement:
+		unticked_class_declaration_statement	{ $$ = new PhpSyntaxNode('class_declaration_statement', array($1)); }
+;
+
+
+is_reference:
+		/* empty */	{ $$ = new PhpSyntaxNode('is_reference', array()); }
+	|	'&'	{ $$ = new PhpSyntaxNode('is_reference', array($1)); }
+;
+
+
+unticked_function_declaration_statement:
+		TT_FUNCTION is_reference TT_STRING '(' parameter_list ')' '{' inner_statement_list '}'	{ $$ = new PhpSyntaxNode('unticked_function_declaration_statement', array($1, $2, $3, $4, $5, $6, $7, $8, $9)); }
+;
+
+unticked_class_declaration_statement:
+		class_entry_type TT_STRING extends_from implements_list '{' class_statement_list '}'	{ $$ = new PhpSyntaxNode('unticked_class_declaration_statement', array($1, $2, $3, $4, $5, $6, $7)); }
+	|	interface_entry TT_STRING interface_extends_list '{' class_statement_list '}'	{ $$ = new PhpSyntaxNode('unticked_class_declaration_statement', array($1, $2, $3, $4, $5, $6)); }
+;
+
+
+class_entry_type:
+		TT_CLASS	{ $$ = new PhpSyntaxNode('class_entry_type', array($1)); }
+	|	TT_ABSTRACT TT_CLASS	{ $$ = new PhpSyntaxNode('class_entry_type', array($1, $2)); }
+	|	TT_FINAL TT_CLASS	{ $$ = new PhpSyntaxNode('class_entry_type', array($1, $2)); }
+;
+
+extends_from:
+		/* empty */	{ $$ = new PhpSyntaxNode('extends_from', array()); }
+	|	TT_EXTENDS fully_qualified_class_name	{ $$ = new PhpSyntaxNode('extends_from', array($1, $2)); }
+;
+
+interface_entry:
+		TT_INTERFACE	{ $$ = new PhpSyntaxNode('interface_entry', array($1)); }
+;
+
+interface_extends_list:
+		/* empty */	{ $$ = new PhpSyntaxNode('interface_extends_list', array()); }
+	|	TT_EXTENDS interface_list	{ $$ = new PhpSyntaxNode('interface_extends_list', array($1, $2)); }
+;
+
+implements_list:
+		/* empty */	{ $$ = new PhpSyntaxNode('implements_list', array()); }
+	|	TT_IMPLEMENTS interface_list	{ $$ = new PhpSyntaxNode('implements_list', array($1, $2)); }
+;
+
+interface_list:
+		fully_qualified_class_name	{ $$ = new PhpSyntaxNode('interface_list', array($1)); }
+	|	interface_list ',' fully_qualified_class_name	{ $$ = new PhpSyntaxNode('interface_list', array($1, $2, $3)); }
+;
+
+foreach_optional_arg:
+		/* empty */	{ $$ = new PhpSyntaxNode('foreach_optional_arg', array()); }
+	|	TT_DOUBLE_ARROW foreach_variable	{ $$ = new PhpSyntaxNode('foreach_optional_arg', array($1, $2)); }
+;
+
+
+foreach_variable:
+		variable	{ $$ = new PhpSyntaxNode('foreach_variable', array($1)); }
+	|	'&' variable	{ $$ = new PhpSyntaxNode('foreach_variable', array($1, $2)); }
+;
+
+for_statement:
+		statement	{ $$ = new PhpSyntaxNode('for_statement', array($1)); }
+	|	':' inner_statement_list TT_ENDFOR ';'	{ $$ = new PhpSyntaxNode('for_statement', array($1, $2, $3, $4)); }
+;
+
+
+foreach_statement:
+		statement	{ $$ = new PhpSyntaxNode('foreach_statement', array($1)); }
+	|	':' inner_statement_list TT_ENDFOREACH ';'	{ $$ = new PhpSyntaxNode('foreach_statement', array($1, $2, $3, $4)); }
+;
+
+
+declare_statement:
+		statement	{ $$ = new PhpSyntaxNode('declare_statement', array($1)); }
+	|	':' inner_statement_list TT_ENDDECLARE ';'	{ $$ = new PhpSyntaxNode('declare_statement', array($1, $2, $3, $4)); }
+;
+
+
+declare_list:
+		TT_STRING '=' static_scalar	{ $$ = new PhpSyntaxNode('declare_list', array($1, $2, $3)); }
+	|	declare_list ',' TT_STRING '=' static_scalar	{ $$ = new PhpSyntaxNode('declare_list', array($1, $2, $3, $4, $5)); }
+;
+
+
+switch_case_list:
+		'{' case_list '}'	{ $$ = new PhpSyntaxNode('switch_case_list', array($1, $2, $3)); }
+	|	'{' ';' case_list '}'	{ $$ = new PhpSyntaxNode('switch_case_list', array($1, $2, $3, $4)); }
+	|	':' case_list TT_ENDSWITCH ';'	{ $$ = new PhpSyntaxNode('switch_case_list', array($1, $2, $3, $4)); }
+	|	':' ';' case_list TT_ENDSWITCH ';'	{ $$ = new PhpSyntaxNode('switch_case_list', array($1, $2, $3, $4, $5)); }
+;
+
+
+case_list:
+		/* empty */	{ $$ = new PhpSyntaxNode('case_list', array()); }
+	|	case_list TT_CASE expr case_separator inner_statement_list	{ $$ = new PhpSyntaxNode('case_list', array($1, $2, $3, $4, $5)); }
+	|	case_list TT_DEFAULT case_separator inner_statement_list	{ $$ = new PhpSyntaxNode('case_list', array($1, $2, $3, $4)); }
+;
+
+
+case_separator:
+		':'	{ $$ = new PhpSyntaxNode('case_separator', array($1)); }
+	|	';'	{ $$ = new PhpSyntaxNode('case_separator', array($1)); }
+;
+
+
+while_statement:
+		statement	{ $$ = new PhpSyntaxNode('while_statement', array($1)); }
+	|	':' inner_statement_list TT_ENDWHILE ';'	{ $$ = new PhpSyntaxNode('while_statement', array($1, $2, $3, $4)); }
+;
+
+
+
+elseif_list:
+		/* empty */	{ $$ = new PhpSyntaxNode('elseif_list', array()); }
+	|	elseif_list TT_ELSEIF '(' expr ')' statement	{ $$ = new PhpSyntaxNode('elseif_list', array($1, $2, $3, $4, $5, $6)); }
+;
+
+
+new_elseif_list:
+		/* empty */	{ $$ = new PhpSyntaxNode('new_elseif_list', array()); }
+	|	new_elseif_list TT_ELSEIF '(' expr ')' ':' inner_statement_list	{ $$ = new PhpSyntaxNode('new_elseif_list', array($1, $2, $3, $4, $5, $6, $7)); }
+;
+
+
+else_single:
+		/* empty */	{ $$ = new PhpSyntaxNode('else_single', array()); }
+	|	TT_ELSE statement	{ $$ = new PhpSyntaxNode('else_single', array($1, $2)); }
+;
+
+
+new_else_single:
+		/* empty */	{ $$ = new PhpSyntaxNode('new_else_single', array()); }
+	|	TT_ELSE ':' inner_statement_list	{ $$ = new PhpSyntaxNode('new_else_single', array($1, $2, $3)); }
+;
+
+
+parameter_list:
+		non_empty_parameter_list	{ $$ = new PhpSyntaxNode('parameter_list', array($1)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('parameter_list', array()); }
+;
+
+
+non_empty_parameter_list:
+		optional_class_type TT_VARIABLE	{ $$ = new PhpSyntaxNode('non_empty_parameter_list', array($1, $2)); }
+	|	optional_class_type '&' TT_VARIABLE	{ $$ = new PhpSyntaxNode('non_empty_parameter_list', array($1, $2, $3)); }
+	|	optional_class_type '&' TT_VARIABLE '=' static_scalar	{ $$ = new PhpSyntaxNode('non_empty_parameter_list', array($1, $2, $3, $4, $5)); }
+	|	optional_class_type TT_VARIABLE '=' static_scalar	{ $$ = new PhpSyntaxNode('non_empty_parameter_list', array($1, $2, $3, $4)); }
+	|	non_empty_parameter_list ',' optional_class_type TT_VARIABLE	{ $$ = new PhpSyntaxNode('non_empty_parameter_list', array($1, $2, $3, $4)); }
+	|	non_empty_parameter_list ',' optional_class_type '&' TT_VARIABLE	{ $$ = new PhpSyntaxNode('non_empty_parameter_list', array($1, $2, $3, $4, $5)); }
+	|	non_empty_parameter_list ',' optional_class_type '&' TT_VARIABLE '=' static_scalar	{ $$ = new PhpSyntaxNode('non_empty_parameter_list', array($1, $2, $3, $4, $5, $6, $7)); }
+	|	non_empty_parameter_list ',' optional_class_type TT_VARIABLE '=' static_scalar	{ $$ = new PhpSyntaxNode('non_empty_parameter_list', array($1, $2, $3, $4, $5, $6)); }
+;
+
+
+optional_class_type:
+		/* empty */	{ $$ = new PhpSyntaxNode('optional_class_type', array()); }
+	|	TT_STRING	{ $$ = new PhpSyntaxNode('optional_class_type', array($1)); }
+	|	TT_ARRAY	{ $$ = new PhpSyntaxNode('optional_class_type', array($1)); }
+;
+
+
+function_call_parameter_list:
+		non_empty_function_call_parameter_list	{ $$ = new PhpSyntaxNode('function_call_parameter_list', array($1)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('function_call_parameter_list', array()); }
+;
+
+
+non_empty_function_call_parameter_list:
+		expr_without_variable	{ $$ = new PhpSyntaxNode('non_empty_function_call_parameter_list', array($1)); }
+	|	variable	{ $$ = new PhpSyntaxNode('non_empty_function_call_parameter_list', array($1)); }
+	|	'&' w_variable	{ $$ = new PhpSyntaxNode('non_empty_function_call_parameter_list', array($1, $2)); }
+	|	non_empty_function_call_parameter_list ',' expr_without_variable	{ $$ = new PhpSyntaxNode('non_empty_function_call_parameter_list', array($1, $2, $3)); }
+	|	non_empty_function_call_parameter_list ',' variable	{ $$ = new PhpSyntaxNode('non_empty_function_call_parameter_list', array($1, $2, $3)); }
+	|	non_empty_function_call_parameter_list ',' '&' w_variable	{ $$ = new PhpSyntaxNode('non_empty_function_call_parameter_list', array($1, $2, $3, $4)); }
+;
+
+global_var_list:
+		global_var_list ',' global_var	{ $$ = new PhpSyntaxNode('global_var_list', array($1, $2, $3)); }
+	|	global_var	{ $$ = new PhpSyntaxNode('global_var_list', array($1)); }
+;
+
+
+global_var:
+		TT_VARIABLE	{ $$ = new PhpSyntaxNode('global_var', array($1)); }
+	|	'$' r_variable	{ $$ = new PhpSyntaxNode('global_var', array($1, $2)); }
+	|	'$' '{' expr '}'	{ $$ = new PhpSyntaxNode('global_var', array($1, $2, $3, $4)); }
+;
+
+
+static_var_list:
+		static_var_list ',' TT_VARIABLE	{ $$ = new PhpSyntaxNode('static_var_list', array($1, $2, $3)); }
+	|	static_var_list ',' TT_VARIABLE '=' static_scalar	{ $$ = new PhpSyntaxNode('static_var_list', array($1, $2, $3, $4, $5)); }
+	|	TT_VARIABLE	{ $$ = new PhpSyntaxNode('static_var_list', array($1)); }
+	|	TT_VARIABLE '=' static_scalar	{ $$ = new PhpSyntaxNode('static_var_list', array($1, $2, $3)); }
+;
+
+
+class_statement_list:
+		class_statement_list class_statement	{ $$ = new PhpSyntaxNode('class_statement_list', array($1, $2)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('class_statement_list', array()); }
+;
+
+
+class_statement:
+		variable_modifiers class_variable_declaration ';'	{ $$ = new PhpSyntaxNode('class_statement', array($1, $2, $3)); }
+	|	class_constant_declaration ';'	{ $$ = new PhpSyntaxNode('class_statement', array($1, $2)); }
+	|	method_modifiers TT_FUNCTION is_reference TT_STRING '(' parameter_list ')' method_body	{ $$ = new PhpSyntaxNode('class_statement', array($1, $2, $3, $4, $5, $6, $7, $8)); }
+;
+
+
+method_body:
+		';' /* abstract method */	{ $$ = new PhpSyntaxNode('method_body', array($1)); }
+	|	'{' inner_statement_list '}'	{ $$ = new PhpSyntaxNode('method_body', array($1, $2, $3)); }
+;
+
+variable_modifiers:
+		non_empty_member_modifiers	{ $$ = new PhpSyntaxNode('variable_modifiers', array($1)); }
+	|	TT_VAR	{ $$ = new PhpSyntaxNode('variable_modifiers', array($1)); }
+;
+
+method_modifiers:
+		/* empty */	{ $$ = new PhpSyntaxNode('method_modifiers', array()); }
+	|	non_empty_member_modifiers	{ $$ = new PhpSyntaxNode('method_modifiers', array($1)); }
+;
+
+non_empty_member_modifiers:
+		member_modifier	{ $$ = new PhpSyntaxNode('non_empty_member_modifiers', array($1)); }
+	|	non_empty_member_modifiers member_modifier	{ $$ = new PhpSyntaxNode('non_empty_member_modifiers', array($1, $2)); }
+;
+
+member_modifier:
+		TT_PUBLIC	{ $$ = new PhpSyntaxNode('member_modifier', array($1)); }
+	|	TT_PROTECTED	{ $$ = new PhpSyntaxNode('member_modifier', array($1)); }
+	|	TT_PRIVATE	{ $$ = new PhpSyntaxNode('member_modifier', array($1)); }
+	|	TT_STATIC	{ $$ = new PhpSyntaxNode('member_modifier', array($1)); }
+	|	TT_ABSTRACT	{ $$ = new PhpSyntaxNode('member_modifier', array($1)); }
+	|	TT_FINAL	{ $$ = new PhpSyntaxNode('member_modifier', array($1)); }
+;
+
+class_variable_declaration:
+		class_variable_declaration ',' TT_VARIABLE	{ $$ = new PhpSyntaxNode('class_variable_declaration', array($1, $2, $3)); }
+	|	class_variable_declaration ',' TT_VARIABLE '=' static_scalar	{ $$ = new PhpSyntaxNode('class_variable_declaration', array($1, $2, $3, $4, $5)); }
+	|	TT_VARIABLE	{ $$ = new PhpSyntaxNode('class_variable_declaration', array($1)); }
+	|	TT_VARIABLE '=' static_scalar	{ $$ = new PhpSyntaxNode('class_variable_declaration', array($1, $2, $3)); }
+;
+
+class_constant_declaration:
+		class_constant_declaration ',' TT_STRING '=' static_scalar	{ $$ = new PhpSyntaxNode('class_constant_declaration', array($1, $2, $3, $4, $5)); }
+	|	TT_CONST TT_STRING '=' static_scalar	{ $$ = new PhpSyntaxNode('class_constant_declaration', array($1, $2, $3, $4)); }
+;
+
+echo_expr_list:
+		echo_expr_list ',' expr	{ $$ = new PhpSyntaxNode('echo_expr_list', array($1, $2, $3)); }
+	|	expr	{ $$ = new PhpSyntaxNode('echo_expr_list', array($1)); }
+;
+
+
+for_expr:
+		/* empty */	{ $$ = new PhpSyntaxNode('for_expr', array()); }
+	|	non_empty_for_expr	{ $$ = new PhpSyntaxNode('for_expr', array($1)); }
+;
+
+non_empty_for_expr:
+		non_empty_for_expr ',' expr	{ $$ = new PhpSyntaxNode('non_empty_for_expr', array($1, $2, $3)); }
+	|	expr	{ $$ = new PhpSyntaxNode('non_empty_for_expr', array($1)); }
+;
+
+expr_without_variable:
+		TT_LIST '(' assignment_list ')' '=' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3, $4, $5, $6)); }
+	|	variable '=' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable '=' '&' variable	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3, $4)); }
+	|	variable '=' '&' TT_NEW class_name_reference ctor_arguments	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3, $4, $5, $6)); }
+	|	TT_NEW class_name_reference ctor_arguments	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	TT_CLONE expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	variable TT_PLUS_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_MINUS_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_MUL_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_DIV_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_CONCAT_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_MOD_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_AND_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_OR_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_XOR_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_SL_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	variable TT_SR_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	rw_variable TT_INC	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_INC rw_variable	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	rw_variable TT_DEC	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_DEC rw_variable	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	expr TT_BOOLEAN_OR expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_BOOLEAN_AND expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_LOGICAL_OR expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_LOGICAL_AND expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_LOGICAL_XOR expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '|' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '&' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '^' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '.' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '+' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '-' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '*' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '/' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '%' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_SL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_SR expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	'+' expr %prec TT_INC	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	'-' expr %prec TT_INC	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	'!' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	'~' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	expr TT_IS_IDENTICAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_IS_NOT_IDENTICAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_IS_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_IS_NOT_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '<' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_IS_SMALLER_OR_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '>' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_IS_GREATER_OR_EQUAL expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr TT_INSTANCEOF class_name_reference	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	'(' expr ')'	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	expr '?' expr ':' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3, $4, $5)); }
+	|	internal_functions_in_yacc	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1)); }
+	|	TT_INT_CAST expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_DOUBLE_CAST expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_STRING_CAST expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_ARRAY_CAST expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_OBJECT_CAST expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_BOOL_CAST expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_UNSET_CAST expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	TT_EXIT exit_expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	'@' expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+	|	scalar	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1)); }
+	|	TT_ARRAY '(' array_pair_list ')'	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3, $4)); }
+	|	'`' encaps_list '`'	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2, $3)); }
+	|	TT_PRINT expr	{ $$ = new PhpSyntaxNode('expr_without_variable', array($1, $2)); }
+;
+
+function_call:
+		TT_STRING '(' function_call_parameter_list ')'	{ $$ = new PhpSyntaxNode('function_call', array($1, $2, $3, $4)); }
+	|	fully_qualified_class_name TT_PAAMAYIM_NEKUDOTAYIM TT_STRING '(' function_call_parameter_list ')'	{ $$ = new PhpSyntaxNode('function_call', array($1, $2, $3, $4, $5, $6)); }
+	|	fully_qualified_class_name TT_PAAMAYIM_NEKUDOTAYIM variable_without_objects '(' function_call_parameter_list ')'	{ $$ = new PhpSyntaxNode('function_call', array($1, $2, $3, $4, $5, $6)); }
+	|	variable_without_objects '(' function_call_parameter_list ')'	{ $$ = new PhpSyntaxNode('function_call', array($1, $2, $3, $4)); }
+;
+
+fully_qualified_class_name:
+		TT_STRING	{ $$ = new PhpSyntaxNode('fully_qualified_class_name', array($1)); }
+;
+
+class_name_reference:
+		TT_STRING	{ $$ = new PhpSyntaxNode('class_name_reference', array($1)); }
+	|	dynamic_class_name_reference	{ $$ = new PhpSyntaxNode('class_name_reference', array($1)); }
+;
+
+
+dynamic_class_name_reference:
+		base_variable TT_OBJECT_OPERATOR object_property dynamic_class_name_variable_properties	{ $$ = new PhpSyntaxNode('dynamic_class_name_reference', array($1, $2, $3, $4)); }
+	|	base_variable	{ $$ = new PhpSyntaxNode('dynamic_class_name_reference', array($1)); }
+;
+
+
+dynamic_class_name_variable_properties:
+		dynamic_class_name_variable_properties dynamic_class_name_variable_property	{ $$ = new PhpSyntaxNode('dynamic_class_name_variable_properties', array($1, $2)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('dynamic_class_name_variable_properties', array()); }
+;
+
+
+dynamic_class_name_variable_property:
+		TT_OBJECT_OPERATOR object_property	{ $$ = new PhpSyntaxNode('dynamic_class_name_variable_property', array($1, $2)); }
+;
+
+exit_expr:
+		/* empty */	{ $$ = new PhpSyntaxNode('exit_expr', array()); }
+	|	'(' ')'	{ $$ = new PhpSyntaxNode('exit_expr', array($1, $2)); }
+	|	'(' expr ')'	{ $$ = new PhpSyntaxNode('exit_expr', array($1, $2, $3)); }
+;
+
+
+ctor_arguments:
+		/* empty */	{ $$ = new PhpSyntaxNode('ctor_arguments', array()); }
+	|	'(' function_call_parameter_list ')'	{ $$ = new PhpSyntaxNode('ctor_arguments', array($1, $2, $3)); }
+;
+
+
+common_scalar:
+		TT_LNUMBER	{ $$ = new PhpSyntaxNode('common_scalar', array($1)); }
+	|	TT_DNUMBER	{ $$ = new PhpSyntaxNode('common_scalar', array($1)); }
+	|	TT_CONSTANT_ENCAPSED_STRING	{ $$ = new PhpSyntaxNode('common_scalar', array($1)); }
+	|	TT_LINE	{ $$ = new PhpSyntaxNode('common_scalar', array($1)); }
+	|	TT_FILE	{ $$ = new PhpSyntaxNode('common_scalar', array($1)); }
+	|	TT_CLASS_C	{ $$ = new PhpSyntaxNode('common_scalar', array($1)); }
+	|	TT_METHOD_C	{ $$ = new PhpSyntaxNode('common_scalar', array($1)); }
+	|	TT_FUNC_C	{ $$ = new PhpSyntaxNode('common_scalar', array($1)); }
+;
+
+
+static_scalar: /* compile-time evaluated scalars */
+		common_scalar	{ $$ = new PhpSyntaxNode('static_scalar', array($1)); }
+	|	TT_STRING	{ $$ = new PhpSyntaxNode('static_scalar', array($1)); }
+	|	'+' static_scalar	{ $$ = new PhpSyntaxNode('static_scalar', array($1, $2)); }
+	|	'-' static_scalar	{ $$ = new PhpSyntaxNode('static_scalar', array($1, $2)); }
+	|	TT_ARRAY '(' static_array_pair_list ')'	{ $$ = new PhpSyntaxNode('static_scalar', array($1, $2, $3, $4)); }
+	|	static_class_constant	{ $$ = new PhpSyntaxNode('static_scalar', array($1)); }
+;
+
+static_class_constant:
+		TT_STRING TT_PAAMAYIM_NEKUDOTAYIM TT_STRING	{ $$ = new PhpSyntaxNode('static_class_constant', array($1, $2, $3)); }
+;
+
+scalar:
+		TT_STRING	{ $$ = new PhpSyntaxNode('scalar', array($1)); }
+	|	TT_STRING_VARNAME	{ $$ = new PhpSyntaxNode('scalar', array($1)); }
+	|	class_constant	{ $$ = new PhpSyntaxNode('scalar', array($1)); }
+	|	common_scalar	{ $$ = new PhpSyntaxNode('scalar', array($1)); }
+	|	'"' encaps_list '"'	{ $$ = new PhpSyntaxNode('scalar', array($1, $2, $3)); }
+	|	TT_START_HEREDOC encaps_list TT_END_HEREDOC	{ $$ = new PhpSyntaxNode('scalar', array($1, $2, $3)); }
+;
+
+
+static_array_pair_list:
+		/* empty */	{ $$ = new PhpSyntaxNode('static_array_pair_list', array()); }
+	|	non_empty_static_array_pair_list possible_comma	{ $$ = new PhpSyntaxNode('static_array_pair_list', array($1, $2)); }
+;
+
+possible_comma:
+		/* empty */	{ $$ = new PhpSyntaxNode('possible_comma', array()); }
+	|	','	{ $$ = new PhpSyntaxNode('possible_comma', array($1)); }
+;
+
+non_empty_static_array_pair_list:
+		non_empty_static_array_pair_list ',' static_scalar TT_DOUBLE_ARROW static_scalar	{ $$ = new PhpSyntaxNode('non_empty_static_array_pair_list', array($1, $2, $3, $4, $5)); }
+	|	non_empty_static_array_pair_list ',' static_scalar	{ $$ = new PhpSyntaxNode('non_empty_static_array_pair_list', array($1, $2, $3)); }
+	|	static_scalar TT_DOUBLE_ARROW static_scalar	{ $$ = new PhpSyntaxNode('non_empty_static_array_pair_list', array($1, $2, $3)); }
+	|	static_scalar	{ $$ = new PhpSyntaxNode('non_empty_static_array_pair_list', array($1)); }
+;
+
+expr:
+		r_variable	{ $$ = new PhpSyntaxNode('expr', array($1)); }
+	|	expr_without_variable	{ $$ = new PhpSyntaxNode('expr', array($1)); }
+;
+
+
+r_variable:
+		variable	{ $$ = new PhpSyntaxNode('r_variable', array($1)); }
+;
+
+
+w_variable:
+		variable	{ $$ = new PhpSyntaxNode('w_variable', array($1)); }
+;
+
+rw_variable:
+		variable	{ $$ = new PhpSyntaxNode('rw_variable', array($1)); }
+;
+
+variable:
+		base_variable_with_function_calls TT_OBJECT_OPERATOR object_property method_or_not variable_properties	{ $$ = new PhpSyntaxNode('variable', array($1, $2, $3, $4, $5)); }
+	|	base_variable_with_function_calls	{ $$ = new PhpSyntaxNode('variable', array($1)); }
+;
+
+variable_properties:
+		variable_properties variable_property	{ $$ = new PhpSyntaxNode('variable_properties', array($1, $2)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('variable_properties', array()); }
+;
+
+
+variable_property:
+		TT_OBJECT_OPERATOR object_property method_or_not	{ $$ = new PhpSyntaxNode('variable_property', array($1, $2, $3)); }
+;
+
+method_or_not:
+		'(' function_call_parameter_list ')'	{ $$ = new PhpSyntaxNode('method_or_not', array($1, $2, $3)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('method_or_not', array()); }
+;
+
+variable_without_objects:
+		reference_variable	{ $$ = new PhpSyntaxNode('variable_without_objects', array($1)); }
+	|	simple_indirect_reference reference_variable	{ $$ = new PhpSyntaxNode('variable_without_objects', array($1, $2)); }
+;
+
+static_member:
+		fully_qualified_class_name TT_PAAMAYIM_NEKUDOTAYIM variable_without_objects	{ $$ = new PhpSyntaxNode('static_member', array($1, $2, $3)); }
+;
+
+
+base_variable_with_function_calls:
+		base_variable	{ $$ = new PhpSyntaxNode('base_variable_with_function_calls', array($1)); }
+	|	function_call	{ $$ = new PhpSyntaxNode('base_variable_with_function_calls', array($1)); }
+;
+
+
+base_variable:
+		reference_variable	{ $$ = new PhpSyntaxNode('base_variable', array($1)); }
+	|	simple_indirect_reference reference_variable	{ $$ = new PhpSyntaxNode('base_variable', array($1, $2)); }
+	|	static_member	{ $$ = new PhpSyntaxNode('base_variable', array($1)); }
+;
+
+reference_variable:
+		reference_variable '[' dim_offset ']'	{ $$ = new PhpSyntaxNode('reference_variable', array($1, $2, $3, $4)); }
+	|	reference_variable '{' expr '}'	{ $$ = new PhpSyntaxNode('reference_variable', array($1, $2, $3, $4)); }
+	|	compound_variable	{ $$ = new PhpSyntaxNode('reference_variable', array($1)); }
+;
+
+
+compound_variable:
+		TT_VARIABLE	{ $$ = new PhpSyntaxNode('compound_variable', array($1)); }
+	|	'$' '{' expr '}'	{ $$ = new PhpSyntaxNode('compound_variable', array($1, $2, $3, $4)); }
+;
+
+dim_offset:
+		/* empty */	{ $$ = new PhpSyntaxNode('dim_offset', array()); }
+	|	expr	{ $$ = new PhpSyntaxNode('dim_offset', array($1)); }
+;
+
+
+object_property:
+		object_dim_list	{ $$ = new PhpSyntaxNode('object_property', array($1)); }
+	|	variable_without_objects	{ $$ = new PhpSyntaxNode('object_property', array($1)); }
+;
+
+object_dim_list:
+		object_dim_list '[' dim_offset ']'	{ $$ = new PhpSyntaxNode('object_dim_list', array($1, $2, $3, $4)); }
+	|	object_dim_list '{' expr '}'	{ $$ = new PhpSyntaxNode('object_dim_list', array($1, $2, $3, $4)); }
+	|	variable_name	{ $$ = new PhpSyntaxNode('object_dim_list', array($1)); }
+;
+
+variable_name:
+		TT_STRING	{ $$ = new PhpSyntaxNode('variable_name', array($1)); }
+	|	'{' expr '}'	{ $$ = new PhpSyntaxNode('variable_name', array($1, $2, $3)); }
+;
+
+simple_indirect_reference:
+		'$'	{ $$ = new PhpSyntaxNode('simple_indirect_reference', array($1)); }
+	|	simple_indirect_reference '$'	{ $$ = new PhpSyntaxNode('simple_indirect_reference', array($1, $2)); }
+;
+
+assignment_list:
+		assignment_list ',' assignment_list_element	{ $$ = new PhpSyntaxNode('assignment_list', array($1, $2, $3)); }
+	|	assignment_list_element	{ $$ = new PhpSyntaxNode('assignment_list', array($1)); }
+;
+
+
+assignment_list_element:
+		variable	{ $$ = new PhpSyntaxNode('assignment_list_element', array($1)); }
+	|	TT_LIST '(' assignment_list ')'	{ $$ = new PhpSyntaxNode('assignment_list_element', array($1, $2, $3, $4)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('assignment_list_element', array()); }
+;
+
+
+array_pair_list:
+		/* empty */	{ $$ = new PhpSyntaxNode('array_pair_list', array()); }
+	|	non_empty_array_pair_list possible_comma	{ $$ = new PhpSyntaxNode('array_pair_list', array($1, $2)); }
+;
+
+non_empty_array_pair_list:
+		non_empty_array_pair_list ',' expr TT_DOUBLE_ARROW expr	{ $$ = new PhpSyntaxNode('non_empty_array_pair_list', array($1, $2, $3, $4, $5)); }
+	|	non_empty_array_pair_list ',' expr	{ $$ = new PhpSyntaxNode('non_empty_array_pair_list', array($1, $2, $3)); }
+	|	expr TT_DOUBLE_ARROW expr	{ $$ = new PhpSyntaxNode('non_empty_array_pair_list', array($1, $2, $3)); }
+	|	expr	{ $$ = new PhpSyntaxNode('non_empty_array_pair_list', array($1)); }
+	|	non_empty_array_pair_list ',' expr TT_DOUBLE_ARROW '&' w_variable	{ $$ = new PhpSyntaxNode('non_empty_array_pair_list', array($1, $2, $3, $4, $5, $6)); }
+	|	non_empty_array_pair_list ',' '&' w_variable	{ $$ = new PhpSyntaxNode('non_empty_array_pair_list', array($1, $2, $3, $4)); }
+	|	expr TT_DOUBLE_ARROW '&' w_variable	{ $$ = new PhpSyntaxNode('non_empty_array_pair_list', array($1, $2, $3, $4)); }
+	|	'&' w_variable	{ $$ = new PhpSyntaxNode('non_empty_array_pair_list', array($1, $2)); }
+;
+
+encaps_list:
+		encaps_list encaps_var	{ $$ = new PhpSyntaxNode('encaps_list', array($1, $2)); }
+	|	encaps_list TT_ENCAPSED_AND_WHITESPACE	{ $$ = new PhpSyntaxNode('encaps_list', array($1, $2)); }
+	|	/* empty */	{ $$ = new PhpSyntaxNode('encaps_list', array()); }
+;
+
+
+
+encaps_var:
+		TT_VARIABLE	{ $$ = new PhpSyntaxNode('encaps_var', array($1)); }
+	|	TT_VARIABLE '[' encaps_var_offset ']'	{ $$ = new PhpSyntaxNode('encaps_var', array($1, $2, $3, $4)); }
+	|	TT_VARIABLE TT_OBJECT_OPERATOR TT_STRING	{ $$ = new PhpSyntaxNode('encaps_var', array($1, $2, $3)); }
+	|	TT_DOLLAR_OPEN_CURLY_BRACES expr '}'	{ $$ = new PhpSyntaxNode('encaps_var', array($1, $2, $3)); }
+	|	TT_DOLLAR_OPEN_CURLY_BRACES TT_STRING_VARNAME '[' expr ']' '}'	{ $$ = new PhpSyntaxNode('encaps_var', array($1, $2, $3, $4, $5, $6)); }
+	|	TT_CURLY_OPEN variable '}'	{ $$ = new PhpSyntaxNode('encaps_var', array($1, $2, $3)); }
+;
+
+
+encaps_var_offset:
+		TT_STRING	{ $$ = new PhpSyntaxNode('encaps_var_offset', array($1)); }
+	|	TT_NUM_STRING	{ $$ = new PhpSyntaxNode('encaps_var_offset', array($1)); }
+	|	TT_VARIABLE	{ $$ = new PhpSyntaxNode('encaps_var_offset', array($1)); }
+;
+
+
+internal_functions_in_yacc:
+		TT_ISSET '(' isset_variables ')'	{ $$ = new PhpSyntaxNode('internal_functions_in_yacc', array($1, $2, $3, $4)); }
+	|	TT_EMPTY '(' variable ')'	{ $$ = new PhpSyntaxNode('internal_functions_in_yacc', array($1, $2, $3, $4)); }
+	|	TT_INCLUDE expr	{ $$ = new PhpSyntaxNode('internal_functions_in_yacc', array($1, $2)); }
+	|	TT_INCLUDE_ONCE expr	{ $$ = new PhpSyntaxNode('internal_functions_in_yacc', array($1, $2)); }
+	|	TT_EVAL '(' expr ')'	{ $$ = new PhpSyntaxNode('internal_functions_in_yacc', array($1, $2, $3, $4)); }
+	|	TT_REQUIRE expr	{ $$ = new PhpSyntaxNode('internal_functions_in_yacc', array($1, $2)); }
+	|	TT_REQUIRE_ONCE expr	{ $$ = new PhpSyntaxNode('internal_functions_in_yacc', array($1, $2)); }
+;
+
+isset_variables:
+		variable	{ $$ = new PhpSyntaxNode('isset_variables', array($1)); }
+	|	isset_variables ',' variable	{ $$ = new PhpSyntaxNode('isset_variables', array($1, $2, $3)); }
+;
+
+class_constant:
+		fully_qualified_class_name TT_PAAMAYIM_NEKUDOTAYIM TT_STRING	{ $$ = new PhpSyntaxNode('class_constant', array($1, $2, $3)); }
+;
+
+%%
+
+/*
+ * Local variables:
+ * tab-width: 4
+ * c-basic-offset: 4
+ * indent-tabs-mode: t
+ * End:
+ */

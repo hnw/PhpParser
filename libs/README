@@ -1,0 +1,14 @@
+Regenerating Parser
+===================
+
+Requirements
+------------
+
+- kmyacc (by kmori, http://www005.upp.so-net.ne.jp/kmori/kmyacc/) 4.1.4 or higher
+- PHP parser model for kmyacc (by moriyoshi, http://d.hatena.ne.jp/moriyoshi/20081004/1223132173)
+
+
+How to Regenerate PhpParser.php
+-------------------------------
+
+kmyacc -m ./kmyacc.class.php.parser -L php -p PhpParser PhpParser.phpy
